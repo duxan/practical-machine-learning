@@ -1,0 +1,118 @@
+---
+title: "Practical machine learning assignment"
+author: "Dusan Randjelovic"
+date: "February 10, 2016"
+output: html_document
+---
+
+Executive summary
+==
+
+One thing that people regularly do is quantify *how much* of a particular activity they do, but they rarely quantify *how well* they do it. Dataset used in this project consists of data from accelerometers that 6 people wore on the belt, forearm, arm, and dumbell. They were doing exercises correctly and incorrectly, and the goal was to predict the manner in which they did the exercise. This is the `classe` variable in the training set.
+
+After discarding columns with missing values, columns with near-zero variance and highly correlated columns, PCA was used to further narrow features. Random forest was modelled with 25 features, giving 0.9741716 accuracy. 
+
+This report, data and other files are in github repo: [github.com/duxan/practical-machine-learning](https://github.com/duxan/practical-machine-learning). This file can be seen also here: [duxan.github.io/practical-machine-learning](https://duxan.github.io/practical-machine-learning).
+
+Exploratory data analyses
+==
+
+Required packages:
+
+```{r, results='hide', warning=FALSE, message=FALSE}
+library(caret)
+```
+
+Download the datasets and split them into `train` and `validate` (from training dataset) and `test` (from testing dataset) after preprocessing for missing values, near-zero variance variables and highly correlated variables.
+
+```{r}
+# 1. set WD
+#setwd("~/apps/datasci/ml_assign/")
+
+# 2. make data folder
+if(!file.exists("./data")){
+    dir.create("./data")
+}
+
+# 3. make handles
+trainingURL <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testingURL <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+# 4. download data
+if(!file.exists("./data/pml-training.csv")){
+  download.file(trainingURL, destfile = "./data/pml-training.csv",  method = "curl")
+  download.file(testingURL, destfile = "./data/pml-testing.csv", method = "curl")
+}
+
+# 5. read data
+training <- read.csv("./data/pml-training.csv", na.strings = c("NA", ""))
+testing <- read.csv("./data/pml-testing.csv", na.strings = c("NA", ""))
+```
+
+First let's remove some columns.
+
+```{r}
+# 6. columns with NAs
+training <- training[sapply(training, function(x) !any(is.na(x)))]
+
+# 7. additional columns to remove (X, user_name, window columns and timestamps)
+remove_cols <- grepl("X|user_name|timestamp|window", colnames(training))
+training <- training[,!remove_cols]
+
+# 8. inspect if there are near-zero-variance variables (numeric only)
+near_zero <- nearZeroVar(training[sapply(training, is.numeric)], saveMetrics = TRUE)
+training <- training[,near_zero[, 'nzv']==FALSE]
+
+# 9. highly correlated variables, > |0.9|
+cor_matrix <- cor(na.omit(training[sapply(training, is.numeric)]))
+rm_cor <- findCorrelation(cor_matrix, cutoff = .90, verbose = F)
+training <- training[,-rm_cor]
+
+# 10. apply the same reduction to testing dataset (except last column)
+col_names <- colnames(training)[colnames(training) != "classe"]
+testing <- testing[, c(col_names, "problem_id")]
+```
+
+We are left with `r dim(training)[2]` variables. Let's split them for training, cros-validation and prediction:
+
+```{r}
+# 11. split data
+inTrain <- createDataPartition(training$classe, p=0.7, list=F)
+train <- training[inTrain,]
+validate <- training[-inTrain,]
+test <- testing
+```
+
+Machine learning
+==
+
+To reduce number of features we can apply PCA and choose only those vars that contribute to 95% of variance (default threshold):
+
+```{r, warning=FALSE, message=FALSE}
+pre_process <- preProcess(train[, -46], method = "pca")
+train_pca <- predict(pre_process, train[, -46])
+validate_pca <- predict(pre_process, validate[, -46])
+test_pca <- predict(pre_process, test[, -46])
+```
+
+If we train with random forest:
+
+```{r, results='hide', warning=FALSE, message=FALSE}
+model <- train(train$classe ~ ., method="rf", data=train_pca, trControl = trainControl(method = "cv", number = 4), importance = T)
+```
+
+we can cross-validate:
+
+```{r, warning=FALSE, message=FALSE}
+cros_valid <- predict(model, validate_pca)
+conf <- confusionMatrix(validate$classe, cros_valid)
+conf$table
+```
+
+We get `r conf$overall["Accuracy"][[1]]` accuracy.
+
+Finally, let's predict on the `test` dataset:
+
+```{r, warning=FALSE, message=FALSE}
+predict(model, test_pca)
+```
